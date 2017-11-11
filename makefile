@@ -27,4 +27,6 @@ bin/client.o: client.c
 #Clean the build directory
 clean: 
 	rm -f server
+	rm -f server.o
 	rm -f client
+	rm -f client.o
