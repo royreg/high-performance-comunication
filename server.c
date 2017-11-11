@@ -54,9 +54,7 @@ int main(int argc, char *argv[])
      clilen = sizeof(cli_addr);
 
      //accept block process until a client connection is established
-     newsockfd = accept(sockfd, 
-                 (struct sockaddr *) &cli_addr, 
-                 &clilen);
+     newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
 
     //this section is only after a client connect to the server                 
      if (newsockfd < 0) 
