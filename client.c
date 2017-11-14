@@ -27,7 +27,7 @@ int warmupRound(int sockfd,char* buffer,struct timeval* tv1,struct timeval* tv2,
 }
 
 void printResoult(int msgSize,int timeInMicroSeconds){
-    printf("%d  %d  microseconds\n",msgSize,timeInMicroSeconds);
+    printf("%d\t%d\tmicroseconds\n",msgSize,timeInMicroSeconds);
 }
 
 
@@ -77,10 +77,6 @@ int main(int argc, char *argv[])
 
     
 
-    //we start sends messages to the server 
-    //after each message we calculate the difference about the time of the round trip
-    //after the gap is less then DELTA we know we pass the overhead and can start the calculation
-    //can see Also the server code for the warmup
     
     for(int num=1;num<=1024;num = num << 1){
     
@@ -90,24 +86,10 @@ int main(int argc, char *argv[])
 
 
      //handels warmup rounds
-     transitionTime=warmupRound(sockfd,buffer,&tv1,&tv2,1);
-
-    //  while(warmup){
-    //     //printf("pervtime is: %d \n" ,transitionTime);
-    //     int temp =  warmupRound(sockfd,buffer,&tv1,&tv2,1);
-    //     if(transitionTime-temp < DELTA){
-    //         printf("endddd\n");
-    //         warmup=0;
-    //         bzero(buffer,BUFFER_SIZE);
-    //         write(sockfd,"a",strlen(stopString));
-    //     }
-    //     else{
-    //         transitionTime = temp;
-    //     }
-    // }
-   // printf("End Of warmuop\n");
-
-    warmupRound(sockfd,buffer,&tv1,&tv2,30);
+     //we chose the warmup round number manually by checking after how many messages 
+     //the gap between two successors messages is not to high
+     //NOTE: warmupRounds is defined in params.h
+    warmupRound(sockfd,buffer,&tv1,&tv2,warmupRounds);
 
 
     //wait to get from server a message for accepting the  end of  the warmup;
@@ -118,6 +100,10 @@ int main(int argc, char *argv[])
     //     transitionTime =  warmupRound(sockfd,buffer,&tv1,&tv2,1);   
     // }
      memset(buffer,'a',num );
+
+     //we chose the X by running the program on lots of X values and we chose the best result
+     // we compared  the change in thorughput after X messages and took where the change is minimal
+     //NOTE: X is defined in params.h
      int timeOfmessage= warmupRound(sockfd,buffer,&tv1,&tv2,X);
      printResoult(num,timeOfmessage);
      bzero(buffer,BUFFER_SIZE);
@@ -129,35 +115,6 @@ int main(int argc, char *argv[])
 
     }
 
-
-
-
-    //printf("x is:%d \n",calculateX(sockfd,buffer,&tv1,&tv2));
-    //sleep(1000000);
-    //this heppend after connection
-    int i;
-    // for(i=1;i<BUFFER_SIZE;i=i << 1 ){
-    //     printf("i is :%d",i);
-    //     bzero(buffer,BUFFER_SIZE);
-
-       
-    // while(messageToSent < X){
-    //     //write input to stream
-    //n = write(sockfd,buffer,strlen(buffer));
-    //     if (n < 0) 
-    //         error("ERROR writing to socket");
-    //     messageToSent++;
-    
-    // }
-        
-
-    // //blocking untill respond is achived to read responds
-    // n = read(sockfd,buffer,BUFFER_SIZE);
-    // if (n < 0) 
-    //      error("ERROR reading from socket");
-    // printf("%s\n",buffer);
-
-    // }
     
     close(sockfd);
     return 0;
