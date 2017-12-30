@@ -100,8 +100,8 @@ struct packet {
         } eager_get_response;
 
         struct {
-        	char key[0];
-        	char ** value;
+        	char  key[0];
+        	
 
         } eager_get_request;
 
@@ -659,16 +659,42 @@ static void usage(const char *argv0)
 void handle_server_packets_only(struct pingpong_context *ctx, struct packet *packet)
 {
 	unsigned response_size = 0;
-	
+
+	printf("packet type is: %d\n",packet->type );
     switch (packet->type) {
+
 	/* Only handle packets relevant to the server here - client will handle inside get/set() calls */
     case EAGER_GET_REQUEST: /* TODO (10LOC): handle a short GET() on the server */
-    	
-    	printf("packet get key is: %s\n",packet->eager_get_request.key);
-    	
+    	printf("gettttt \n");
+       	char* keyFromCLient = packet->eager_get_request.key;
+       	printf("key is : %s\n",keyFromCLient );
+
+       	Link* keVal = getLinkWithKey(keyFromCLient,keyValList);
+       	if(keVal == NULL)
+       		return; 
+
+
+
+       	char *valInGet = keVal->value;
+       	struct packet* resPacket = (struct packet*) ctx->buf;
+
+	       	
+       	resPacket->eager_get_response.value_length = strlen(valInGet);
+
+       	unsigned packet_size = strlen(valInGet)+1 + sizeof(struct packet);
+
+       	strcpy(resPacket->eager_get_response.value,valInGet);
+       	resPacket->type = EAGER_GET_RESPONSE;
+       	response_size = packet_size;
+       	printf("response size is: %d\n",response_size );
+       	printf("packetSize is size is: %d\n",sizeof(struct packet) );
+       	printf("sslsls%s\n",	resPacket->eager_get_request.key );
+
     	break;
 
     case EAGER_SET_REQUEST: /* TODO (10LOC): handle a short SET() on the server */
+
+    	
     		; //empty statements to follow label(c compiling issues)
     		char *key = strdup(packet->eager_set_request.key_and_value);
     		//printf("packet key is: %s\n",key );
@@ -677,7 +703,8 @@ void handle_server_packets_only(struct pingpong_context *ctx, struct packet *pac
     		//printf("packet val is: %s\n",val );
     		//adding the key and the value to the key value data structure
     		addKeyValue(key , val ,keyValList);
-    		response_size = 1;
+    		
+    		
 
 
     		break;
@@ -692,6 +719,8 @@ void handle_server_packets_only(struct pingpong_context *ctx, struct packet *pac
     }
 	
 	if (response_size) {
+
+
 		pp_post_send(ctx, IBV_WR_SEND, response_size, NULL, NULL, 0);
 	}
 }
@@ -927,12 +956,13 @@ int pp_wait_completions(struct pingpong_context *ctx, int iters)
 
 			switch ((int) wc[i].wr_id) {
 			case PINGPONG_SEND_WRID:
-					scnt++;
-					rcnt++;
+				
+				scnt++;
+				
 				break;
 
 			case PINGPONG_RECV_WRID:
-
+				rcnt++;
 				handle_server_packets_only(ctx, ctx->buf);
 				pp_post_recv(ctx, 1);
 
@@ -991,35 +1021,42 @@ int kv_set(void *kv_handle, const char *key, const char *value)
 }
 
 int kv_get(void *kv_handle, const char *key, char **value)
-{	
-	struct pingpong_context *ctx = kv_handle;
+{
+
+    struct pingpong_context *ctx = kv_handle;
 
     struct packet *get_packet = (struct packet*)ctx->buf;
 
-    unsigned packet_size = strlen(key)  + sizeof(char**)+ sizeof(struct packet);
+    unsigned packet_size = strlen(key) + sizeof(struct packet);
 
-
-     if (packet_size < (EAGER_PROTOCOL_LIMIT)) {
-        /* Eager protocol - exercise part 1 */
+    if (packet_size < (EAGER_PROTOCOL_LIMIT)) {
+        
         get_packet->type = EAGER_GET_REQUEST;
         
-
-        //copy the key to packet
-        strcpy(get_packet->eager_get_request.key,key);
-        printf("packet in get key is: %s\n",get_packet->eager_get_request.key );
-
-        get_packet->eager_get_request.value = value;
+        char* packetKey = get_packet->eager_get_request.key;
+        strcpy(packetKey,key);
         
+        //printf("key_and_value key is %s\n",key_and_value);
+        //printf("temp value is %s\n",key_and_value+strlen(key)+1);
+ 
+   		/* Posts a receive-buffer for response*/
+        pp_post_recv(ctx, 1); 
+    	pp_post_send(ctx, IBV_WR_SEND, packet_size, NULL, NULL, 0); /* Sends the packet to the server */
+    	pp_wait_completions(ctx, 2); /* wait for both to complete */
 
-        
-
-        pp_post_send(ctx, IBV_WR_SEND, packet_size, NULL, NULL, 0); /* Sends the packet to the server */
-        return pp_wait_completions(ctx, 1); /* await EAGER_SET_REQUEST completion */
+      	printf("val response is: %d\n",strlen(get_packet->eager_get_response.value));
+      	char* returnVal = malloc(get_packet->eager_get_response.value_length+1);
+      	strcpy(returnVal,get_packet->eager_get_response.value);
+      	
+      	strcpy(*value,returnVal);
+      	
     }
 
 
     return 0; /* TODO (25LOC): similar to SET, only no n*/
 }
+
+
 
 void kv_release(char *value)
 {
@@ -1231,7 +1268,7 @@ int main(int argc, char **argv)
     void *kv_ctx; /* handle to internal KV-client context */
 
     char* send_buffer = malloc(MAX_TEST_SIZE);
-    char *recv_buffer;
+    char *recv_buffer = malloc(MAX_TEST_SIZE);
 
     struct kv_server_address servers[2] = {
             {
@@ -1272,13 +1309,16 @@ int main(int argc, char **argv)
     assert(0 == set(kv_ctx, "1", send_buffer));
     printf("   blala \n");
     assert(0 == get(kv_ctx, "1", &recv_buffer));
+	printf("   zlzlz \n");
+	printf("receive Buffer is %s\n",recv_buffer);
+	printf("comparisiion is %d\n",strcmp(send_buffer, recv_buffer));
 
     assert(0 == strcmp(send_buffer, recv_buffer));
     release(recv_buffer);
 
     /* Test logic */
     assert(0 == get(kv_ctx, "test1", &recv_buffer));
-    assert(0 == strcmp(send_buffer, recv_buffer));
+    assert(0 == strcmp(send_buffer, *recv_buffer));
     release(recv_buffer);
     memset(send_buffer, 'b', 100);
     assert(0 == set(kv_ctx, "1", send_buffer));
