@@ -111,11 +111,14 @@ struct packet {
 
         /* RENDEZVOUS PROTOCOL PACKETS */
         struct {
+        	char key[0];
           
         } rndv_get_request;
 
         struct {
-            /* TODO */
+             uint32_t rkey;
+             void* addr;
+             unsigned value_length;
         } rndv_get_response;
 
         struct {
@@ -665,7 +668,7 @@ void handle_server_packets_only(struct pingpong_context *ctx, struct packet *pac
 	unsigned response_size = 0;
 	int toPrint=0;
 
-	//printf("packet type is: %d\n",packet->type );
+	printf("packet type is: %d\n",packet->type );
     switch (packet->type) {
 
 	/* Only handle packets relevant to the server here - client will handle inside get/set() calls */
@@ -678,6 +681,12 @@ void handle_server_packets_only(struct pingpong_context *ctx, struct packet *pac
        	Link* keVal = getLinkWithKey(keyFromCLient,keyValList);
        	if(keVal == NULL)
        		return; 
+
+       	int valSize = strlen(keVal->value);
+       	if(valSize > (EAGER_PROTOCOL_LIMIT)){
+       		goto RENDEZVOUS_GET;
+       		break;
+       	}
 
 
 
@@ -692,9 +701,7 @@ void handle_server_packets_only(struct pingpong_context *ctx, struct packet *pac
        	strcpy(resPacket->eager_get_response.value,valInGet);
        	resPacket->type = EAGER_GET_RESPONSE;
        	response_size = packet_size;
-       	//printf("response size is: %d\n",response_size );
-       	//printf("packetSize is size is: %d\n",sizeof(struct packet) );
-       	//printf("sslsls%s\n",	resPacket->eager_get_request.key );
+      
 
     	break;
 
@@ -715,8 +722,41 @@ void handle_server_packets_only(struct pingpong_context *ctx, struct packet *pac
 
     		break;
     case RENDEZVOUS_GET_REQUEST: /* TODO (10LOC): handle a long GET() on the server */
-    		printf("RENDEZVOUS GET\n" );
+    		RENDEZVOUS_GET:
+    		printf("RENDEZVOUS_GETTTTT\n");
+    		char *valToGet = keVal->value;
+    		struct ibv_mr *tempmr;
+			uint32_t get_key;
+			void* get_addr;
+			printf("ROTTT\n");
+			tempmr = ibv_reg_mr(ctx->pd,valToGet,strlen(valToGet)+1,IBV_ACCESS_LOCAL_WRITE |
+								IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+			if (!tempmr) {
+				fprintf(stderr, "Error, ibv_reg_mr() failed\n");
+				return -1;
+			}
+
+			get_key = tempmr->rkey;
+			get_addr = (void*)tempmr->addr;
+			printf("get_key is : %x\n",get_key );
+			printf("addr is : %x\n",get_addr );
+			struct packet* getRes = (struct packet*) ctx->buf;
+
+			getRes->rndv_get_response.rkey = get_key;
+       	
+	       	getRes->rndv_get_response.addr = get_addr;
+	       	getRes->rndv_get_response.value_length = valSize;
+	       	
+	       	getRes->type = RENDEZVOUS_GET_RESPONSE;
+	       	
+	       	response_size = sizeof(struct packet);
+	       	
+	       	printf("seindin back rkey: %x addr : %x\n",	getRes->rndv_get_response.rkey
+				,getRes->rndv_get_response.addr );
+			
+
     		break;
+
     case RENDEZVOUS_SET_REQUEST: 
     	printf("RENDEZVOUS SET\n");
     	
@@ -729,10 +769,11 @@ void handle_server_packets_only(struct pingpong_context *ctx, struct packet *pac
     	char* valueSpace = malloc(valueLength+1);
     	addKeyValue(recKey,valueSpace,keyValList);
 
+
     	struct ibv_mr *mr;
 		uint32_t my_key;
 		void* my_addr;
-		struct ibv_pd *pd;
+		
 
     	mr = ibv_reg_mr(ctx->pd,valueSpace,valueLength+1,IBV_ACCESS_LOCAL_WRITE |
 		IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
@@ -759,7 +800,7 @@ void handle_server_packets_only(struct pingpong_context *ctx, struct packet *pac
        	
        	printf("seindin back rkey: %x addr : %x\n",	memPacket->rndv_set_response.rkey
 			,memPacket->rndv_set_response.addr );
-
+       	break;
 
 
 
@@ -1078,10 +1119,22 @@ int kv_set(void *kv_handle, const char *key, const char *value)
 
     printf("addr is %x\n",addr );
     printf("rkey is %x\n",rkey );
+    struct ibv_mr* oldMR = ctx->mr;
     ctx->mr = ibv_reg_mr(ctx->pd, value, strlen(value)+1, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE
     	|IBV_ACCESS_REMOTE_READ);
     pp_post_send(ctx, IBV_WR_RDMA_WRITE, strlen(value)+1, value, addr, rkey);
-    return pp_wait_completions(ctx, 1); /* wait for both to complete */
+    int res =  pp_wait_completions(ctx, 1); /* wait for both to complete */
+
+    struct ibv_mr* mrToRelease = ctx->mr;
+
+    ctx->mr = oldMR;
+
+    if (ibv_dereg_mr(mrToRelease)) {
+			fprintf(stderr, "Error, ibv_dereg_mr() failed\n");
+			return -1;
+		}
+    printf("RENDEZVOUS SET FINISH! \n");
+    return res;
 }
 
 int kv_get(void *kv_handle, const char *key, char **value)
@@ -1107,15 +1160,60 @@ int kv_get(void *kv_handle, const char *key, char **value)
         pp_post_recv(ctx, 1); 
     	pp_post_send(ctx, IBV_WR_SEND, packet_size, NULL, NULL, 0); /* Sends the packet to the server */
     	pp_wait_completions(ctx, 2); /* wait for both to complete */
+    	if(get_packet->type == EAGER_GET_RESPONSE){
 
-      	//printf("val response is: %d\n",strlen(get_packet->eager_get_response.value));
-      	char* returnVal = malloc(get_packet->eager_get_response.value_length+1);
-      	strcpy(returnVal,get_packet->eager_get_response.value);
-      	memset(get_packet->eager_get_response.value,0,get_packet->eager_get_response.value_length+1);
-      	
-      	strcpy(*value,returnVal);
+	      	//printf("val response is: %d\n",strlen(get_packet->eager_get_response.value));
+	      	char* returnVal = malloc(get_packet->eager_get_response.value_length+1);
+	      	strcpy(returnVal,get_packet->eager_get_response.value);
+	      	memset(get_packet->eager_get_response.value,0,get_packet->eager_get_response.value_length+1);
+	      	
+	      	strcpy(*value,returnVal);
+	      	free(returnVal);
+      	}
+      	else {
+		    printf("RENDEZVOUS GET RESPONSE\n");
+		    printf("value length is %d\n",get_packet->rndv_get_response.value_length);
+		    printf("rkey is %x\n",get_packet->rndv_get_response.rkey);
+		    printf("addr  is %x\n",get_packet->rndv_get_response.addr);
+
+		    uint32_t rkey = get_packet->rndv_get_response.rkey;
+    		void* addr = get_packet->rndv_get_response.addr;
+    		int bytesToRead = get_packet->rndv_get_response.value_length;
+    		char* tempValue = malloc(bytesToRead + 1);
+
+		    struct ibv_mr* oldMR = ctx->mr;
+		    ctx->mr = ibv_reg_mr(ctx->pd, tempValue, bytesToRead+1, IBV_ACCESS_LOCAL_WRITE);
+		    if (!ctx->mr) {
+				fprintf(stderr, "Error, ibv_reg_mr() failed\n");
+				return -1;
+			}
+
+		    pp_post_send(ctx, IBV_WR_RDMA_READ, bytesToRead, tempValue, addr, rkey);
+		    printf("oooooo\n");
+		    int res =  pp_wait_completions(ctx, 1); /* wait for both to complete */
+		   	struct ibv_mr* mrToRelease = ctx->mr;
+		    ctx->mr = oldMR;
+
+		    if (ibv_dereg_mr(mrToRelease)) {
+				fprintf(stderr, "Error, ibv_dereg_mr() failed\n");
+				return -1;
+			}
+
+
+		    strcpy(*value,tempValue);
+		    free(tempValue);
+
+		    printf("RENDEZVOUS GET FINISH! \n");
+			return res;				    
+		    
+
+		    
+
+
+		}
       	
     }
+
 
 
     return 0; /* TODO (25LOC): similar to SET, only no n*/
@@ -1400,16 +1498,20 @@ int main(int argc, char **argv)
     /* Test large size */
     memset(send_buffer, 'a', MAX_TEST_SIZE - 1);
     assert(0 == set(kv_ctx, "1", send_buffer));
+    printf("fifth SUCCESS\n");
     assert(0 == set(kv_ctx, "333", send_buffer));
+    printf("sixth SUCCESS\n");
     assert(0 == get(kv_ctx, "1", &recv_buffer));
+    printf("seventh SUCCESS\n");
     assert(0 == strcmp(send_buffer, recv_buffer));
     release(recv_buffer);
-	
+	printf("finish TESTS\n");
 	
 #ifdef EX4
 	recursive_fill_kv(TEST_LOCATION, kv_ctx);
 #endif
 
     my_close(kv_ctx);
+    printf("Client out gracefully\n");
     return 0;
 }
